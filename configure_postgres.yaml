@@ -1,0 +1,41 @@
+---
+- hosts: astra
+  become: yes
+  vars_files:
+    - vars.yaml
+  tasks:
+    - name: "Создание базы данных"
+      become: yes
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ db_name }}"
+        state: present
+
+    - name: "Создание пользователя"
+      community.postgresql.postgresql_user:
+        state: present
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+      become: yes
+      become_user: postgres
+
+    - name: "Привилегии для пользователя"
+      community.postgresql.postgresql_privs:
+        type: database
+        database: "{{ db_name }}"
+        roles: "{{ db_user }}"
+        grant_option: no
+        privs: all
+      become: yes
+      become_user: postgres
+
+    - name: "Ограничения подключения"
+      ansible.builtin.lineinfile:
+        path: /etc/postgresql/11/main/pg_hba.conf
+        line: "host all all 192.168.0.3/32 md5"
+        create: no
+        state: present
+        insertafter: EOF
+
+    - name: "Перезапуск Postgre"
+      service: "name=postgresql state=restarted enabled=yes"

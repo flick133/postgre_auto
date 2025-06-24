@@ -1,0 +1,19 @@
+- name: Configure static network on Astra Linux
+  hosts: astra
+  become: yes
+  tasks:
+    - name: Configure static IP for eth0
+      ansible.builtin.blockinfile:
+        path: /etc/network/interfaces
+        block: |
+          auto eth1
+          iface eth1 inet static
+            address 192.168.0.2/24
+            gateway 192.168.0.1
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - eth0 config"
+        insertafter: EOF
+
+    - name: Restart networking service
+      ansible.builtin.service:
+        name: networking
+        state: restarted

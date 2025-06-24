@@ -1,0 +1,7 @@
+[vagrant]
+astra ansible_host=127.0.0.1 ansible_port=2200 ansible_user=vagrant ansible_private_key_file=.vagrant/machines/astra/virtualbox/private_key
+alt ansible_host=127.0.0.1 ansible_port=2222 ansible_user=vagrant ansible_private_key_file=.vagrant/machines/alt/virtualbox/private_key
+redos ansible_host=127.0.0.1 ansible_port=2201 ansible_user=vagrant ansible_private_key_file=.vagrant/machines/redos/virtualbox/private_key
+
+[vagrant:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'

@@ -1,0 +1,31 @@
+---
+- name: Configure network interface on ALT Linux
+  hosts: alt
+  become: yes
+  tasks:
+    # Создаем директорию для интерфейса, если её нет
+    - name: Ensure directory /etc/net/ifaces/enp0s8 exists
+      ansible.builtin.file:
+        path: /etc/net/ifaces/enp0s8
+        state: directory
+        mode: '0755'
+
+    # Создаем конфигурационный файл интерфейса
+    - name: Configure static IP for enp0s8
+      ansible.builtin.copy:
+        dest: /etc/net/ifaces/enp0s8/options
+        content: |
+          # Настройки интерфейса enp0s8 (Ansible)
+          IPADDR=192.168.0.3
+          PREFIX=24
+          GATEWAY=192.168.0.1
+          ONBOOT=yes
+          BOOTPROTO=static
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Включаем интерфейс (если требуется)
+    - name: Bring up the interface (optional)
+      ansible.builtin.command: ifup enp0s8
+      ignore_errors: yes  # На случай, если интерфейс уже включен

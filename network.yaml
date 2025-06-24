@@ -1,0 +1,76 @@
+---
+- name: Configure network interfaces and NAT
+  hosts: redos
+  become: yes
+  tasks:
+
+    # Настройка внутреннего интерфейса enp0s8
+    - name: Configure internal interface (enp0s8)
+      community.general.nmcli:
+        conn_name: "enp0s8"
+        ifname: "enp0s8"
+        type: "ethernet"
+        ip4: "192.168.0.1/24"
+        state: present
+
+    # Включение IP forwarding
+    - name: Enable IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: yes
+
+    # Установка iptables и настройка NAT
+    - name: Install iptables
+      package:
+        name: iptables
+        state: present
+
+    - name:
+      iptables:
+        flush: yes
+
+    - name:
+      iptables:
+        chain: "{{ item }}"
+        policy: ACCEPT
+      loop:
+        - INPUT
+        - FORWARD
+        - OUTPUT
+
+    - name:
+      iptables:
+        chain: INPUT
+        ctstate: ESTABLISHED,RELATED
+        jump: ACCEPT
+
+    - name:
+      iptables:
+        chain: INPUT
+        in_interface: lo
+        jump: ACCEPT
+
+    - name:
+      iptables:
+        chain: POSTROUTING
+        table: nat
+        out_interface: enp0s3
+        jump: MASQUERADE
+        source: 192.168.0.0/24
+
+    - name:
+      iptables:
+        chain: FORWARD
+        in_interface: enp0s8
+        out_interface: enp0s3
+        jump: ACCEPT
+
+    - name:
+      iptables:
+        chain: FORWARD
+        in_interface: enp0s3
+        out_interface: enp0s8
+        ctstate: ESTABLISHED,RELATED
+        jump: ACCEPT

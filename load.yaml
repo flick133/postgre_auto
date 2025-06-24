@@ -1,0 +1,22 @@
+- name: Determine server roles
+  hosts: all
+  tasks:
+    # Собираем информацию о загрузке CPU (1-минутное среднее)
+    - name: Collect CPU load
+      shell: cat /proc/loadavg | awk '{print $1}'
+      register: cpu_load  # Сохраняем результат в переменную
+      
+    # Собираем информацию об использовании памяти (%)
+    - name: Collect memory usage
+      shell: free -m | awk '/Mem:/ {print $3/$2 * 100.0}'
+      register: mem_usage
+      
+    # Вычисляем общую нагрузку на сервер (среднее между CPU и памятью)
+    - name: Calculate server load
+      set_fact:
+        server_load: "{{ (cpu_load.stdout|float + mem_usage.stdout|float) / 2 }}"
+        
+    # Выводим информацию о нагрузке для отладки
+    - name: Debug load info
+      debug:
+        var: server_load

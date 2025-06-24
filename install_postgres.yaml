@@ -1,0 +1,24 @@
+---
+- hosts: astra
+  become: yes
+
+  vars_files:
+    - vars.yml
+  pre_tasks:
+    - name: "Установка пакета postgree"
+      apt: "name={{ item }} state=present"
+      with_items:
+        - postgresql
+
+    - name: "Установка пакета psycopg"
+      apt: "name={{ item }} state=present"
+      with_items:
+        - python3-psycopg2
+  tasks:
+    - name: "Запуск Postgre"
+      service: "name={{ item }} state=started enabled=yes"
+      with_items:
+        - postgresql
+  handlers:
+    - name: restart postgres
+      service: name=postgresql state=restarted

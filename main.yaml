@@ -1,0 +1,15 @@
+---
+- name: load
+  import_playbook: load.yaml
+- name: redos network
+  import_playbook: network.yaml
+- name: astra network
+  import_playbook: network_astra.yaml
+- name: alt network
+  import_playbook: network_alt.yaml
+- name: name
+  import_playbook: name.yaml
+- name: install postgres
+  import_playbook: install_postgres.yaml
+- name: configure postgres
+  import_playbook: configure_postgres.yaml

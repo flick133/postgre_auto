@@ -1,0 +1,237 @@
+---
+# Первый этап: базовая настройка всех серверов
+- name: Configure infrastructure and deploy PostgreSQL
+  hosts: all  # Применяем ко всем хостам
+  gather_facts: yes  # Собираем информацию о системе
+  tasks:
+    # Устанавливаем необходимые системные утилиты
+    - name: Install system tools
+      package:
+        name:
+          - python3       # Необходим для работы Ansible
+          - python3-psutil  # Для сбора метрик нагрузки
+          - net-tools    # Сетевые утилиты (ifconfig и др.)
+        state: present
+      become: yes  # Выполняем с правами root
+
+# Второй этап: определение ролей серверов
+- name: Determine server roles
+  hosts: all
+  tasks:
+    # Собираем информацию о загрузке CPU (1-минутное среднее)
+    - name: Collect CPU load
+      shell: cat /proc/loadavg | awk '{print $1}'
+      register: cpu_load  # Сохраняем результат в переменную
+      
+    # Собираем информацию об использовании памяти (%)
+    - name: Collect memory usage
+      shell: free -m | awk '/Mem:/ {print $3/$2 * 100.0}'
+      register: mem_usage
+      
+    # Вычисляем общую нагрузку на сервер (среднее между CPU и памятью)
+    - name: Calculate server load
+      set_fact:
+        server_load: "{{ (cpu_load.stdout|float + mem_usage.stdout|float) / 2 }}"
+        
+    # Выводим информацию о нагрузке для отладки
+    - name: Debug load info
+      debug:
+        var: server_load
+
+# Третий этап: настройка маршрутизатора (самый загруженный сервер)
+- name: Configure router (most loaded server)
+  hosts: "{{ groups['all'] | sort(attribute='server_load') | last }}"  # Выбираем самый загруженный сервер
+  tasks:
+    # Устанавливаем hostname маршрутизатора
+    - name: Set hostname as router
+      hostname:
+        name: router
+      become: yes
+      
+    # Настраиваем сетевые интерфейсы для ALT и RED OS
+    - name: Configure network interfaces
+      template:
+        src: interfaces-router.j2  # Шаблон конфигурации
+        dest: /etc/network/interfaces  # Куда сохраняем
+      become: yes
+      when: ansible_distribution in ['altlinux', 'redos']  # Только для этих ОС
+      
+    # Отдельная конфигурация для Astra Linux (использует другой формат)
+    - name: Configure network on Astra
+      template:
+        src: network-astra-router.j2
+        dest: /etc/network/interfaces
+      become: yes
+      when: ansible_distribution == 'astra'  # Только для Astra
+      
+    # Включаем IP-форвардинг (необходим для NAT)
+    - name: Enable IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        reload: yes  # Применяем изменения сразу
+      become: yes
+      
+    # Настраиваем NAT для выхода в интернет
+    - name: Configure NAT
+      iptables:
+        table: nat
+        chain: POSTROUTING
+        out_interface: "{{ public_interface }}"  # Интерфейс с выходом в интернет
+        jump: MASQUERADE  # Маскируем внутренние IP
+        action: append   # Добавляем правило
+      become: yes
+      
+    # Сохраняем правила iptables для восстановления после перезагрузки
+    - name: Save iptables rules
+      shell: iptables-save > /etc/iptables.rules
+      become: yes
+      
+    # Настраиваем DNS и DHCP для внутренней сети
+    - name: Configure DNS for internal network
+      template:
+        src: dnsmasq.conf.j2
+        dest: /etc/dnsmasq.conf
+      become: yes
+      notify: restart dnsmasq  # Перезапускаем службу при изменении
+      
+  vars:
+    public_interface: "eth1"  # Интерфейс для выхода в интернет
+    
+  # Обработчики для перезапуска служб
+  handlers:
+    - name: restart dnsmasq
+      service:
+        name: dnsmasq
+        state: restarted
+      become: yes
+
+# Четвертый этап: установка PostgreSQL на все серверы
+- name: Install PostgreSQL on all servers
+  hosts: all
+  tasks:
+    # Устанавливаем PostgreSQL (разные названия пакетов для разных ОС)
+    - name: Install PostgreSQL
+      package:
+        name: "{{ 'postgresql-13' if ansible_distribution == 'altlinux' else 'postgresql' }}"
+        state: present
+      become: yes
+      
+    # Запускаем службу PostgreSQL и добавляем в автозагрузку
+    - name: Ensure PostgreSQL is running
+      service:
+        name: "{{ 'postgresql-13' if ansible_distribution == 'altlinux' else 'postgresql' }}"
+        state: started
+        enabled: yes
+      become: yes
+
+# Пятый этап: настройка первичного сервера PostgreSQL (наименее загруженный)
+- name: Configure primary PostgreSQL (least loaded server)
+  hosts: "{{ groups['all'] | sort(attribute='server_load') | first }}"
+  tasks:
+    # Устанавливаем hostname для первичного сервера
+    - name: Set hostname as pg-primary
+      hostname:
+        name: pg-primary
+      become: yes
+      
+    # Настраиваем конфигурацию PostgreSQL
+    - name: Configure PostgreSQL
+      template:
+        src: postgresql-primary.conf.j2
+        dest: "{{ '/var/lib/pgsql/13/data/postgresql.conf' if ansible_distribution == 'altlinux' else '/etc/postgresql/12/main/postgresql.conf' }}"
+      become: yes
+      notify: restart postgresql  # Перезапускаем после изменения
+      
+    # Настраиваем доступ к PostgreSQL
+    - name: Configure pg_hba.conf
+      template:
+        src: pg_hba.conf.j2
+        dest: "{{ '/var/lib/pgsql/13/data/pg_hba.conf' if ansible_distribution == 'altlinux' else '/etc/postgresql/12/main/pg_hba.conf' }}"
+      become: yes
+      notify: restart postgresql
+      
+    # Создаем базу данных для приложения
+    - name: Create application database
+      postgresql_db:
+        name: app_db
+        encoding: UTF-8
+        lc_ctype: en_US.UTF-8
+        lc_collate: en_US.UTF-8
+        state: present
+      become: yes
+      become_user: postgres  # Выполняем от имени пользователя postgres
+      
+    # Создаем пользователя базы данных
+    - name: Create database user
+      postgresql_user:
+        name: app_user
+        password: "securepassword123"  # Пароль пользователя
+        db: app_db
+        priv: "ALL"  # Даем все права на базу
+        state: present
+      become: yes
+      become_user: postgres
+      
+  # Обработчик для перезапуска PostgreSQL
+  handlers:
+    - name: restart postgresql
+      service:
+        name: "{{ 'postgresql-13' if ansible_distribution == 'altlinux' else 'postgresql' }}"
+        state: restarted
+      become: yes
+
+# Шестой этап: настройка standby серверов PostgreSQL
+- name: Configure standby PostgreSQL servers
+  hosts: "{{ groups['all'] | sort(attribute='server_load')[1:-1] }}"  # Все серверы кроме самого и наименее загруженного
+  tasks:
+    # Устанавливаем hostname для standby серверов
+    - name: Set hostname as pg-standby
+      hostname:
+        name: "pg-standby-{{ ansible_hostname }}"  # Уникальное имя с учетом исходного hostname
+      become: yes
+      
+    # Настраиваем конфигурацию PostgreSQL для standby
+    - name: Configure PostgreSQL
+      template:
+        src: postgresql-standby.conf.j2
+        dest: "{{ '/var/lib/pgsql/13/data/postgresql.conf' if ansible_distribution == 'altlinux' else '/etc/postgresql/12/main/postgresql.conf' }}"
+      become: yes
+      notify: restart postgresql
+      
+    # Настраиваем доступ для standby
+    - name: Configure pg_hba.conf
+      template:
+        src: pg_hba.conf.j2
+        dest: "{{ '/var/lib/pgsql/13/data/pg_hba.conf' if ansible_distribution == 'altlinux' else '/etc/postgresql/12/main/pg_hba.conf' }}"
+      become: yes
+      notify: restart postgresql
+      
+  handlers:
+    - name: restart postgresql
+      service:
+        name: "{{ 'postgresql-13' if ansible_distribution == 'altlinux' else 'postgresql' }}"
+        state: restarted
+      become: yes
+
+# Седьмой этап: ограничение доступа к первичному серверу PostgreSQL
+- name: Configure access restrictions
+  hosts: pg-primary
+  tasks:
+    # Разрешаем доступ к PostgreSQL только из внутренней сети
+    - name: Configure firewall for PostgreSQL
+      ufw:
+        rule: allow
+        proto: tcp
+        port: 5432  # Порт PostgreSQL
+        src: 192.168.56.0/24  # Только внутренняя сеть
+      become: yes
+      
+    # Запрещаем все остальные подключения к PostgreSQL
+    - name: Deny other access to PostgreSQL
+      ufw:
+        rule: deny
+        proto: tcp
+        port: 5432
+      become: yes
